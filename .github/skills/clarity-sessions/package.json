@@ -1,0 +1,14 @@
+{
+  "name": "clarity-sessions",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Generate Microsoft Clarity session recordings by driving the site with Playwright across Chrome, Edge, and Firefox.",
+  "scripts": {
+    "setup": "npm install && npx playwright install firefox",
+    "generate": "node generate-sessions.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.56.0"
+  }
+}
