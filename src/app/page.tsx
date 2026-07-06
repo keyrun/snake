@@ -3,7 +3,7 @@ import { ThemeToggle } from "@/components/theme/theme-toggle";
 
 export default function Home() {
   return (
-    <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-8 px-4 py-8 sm:px-6 sm:py-12">
+    <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-8 px-4 pb-8 pt-3 sm:px-6 sm:pb-12 sm:pt-5">
       <header className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <span
