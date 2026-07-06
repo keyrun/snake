@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { GoogleTagManager } from "@next/third-parties/google";
+import { GoogleAnalytics, GoogleTagManager } from "@next/third-parties/google";
 import "./globals.css";
 import { ThemeProvider, themeInitScript } from "@/components/theme/theme-provider";
 
@@ -17,6 +17,10 @@ const geistMono = Geist_Mono({
 // Google Tag Manager container ID. Override per-environment with
 // NEXT_PUBLIC_GTM_ID; falls back to the project's default container.
 const GTM_ID = process.env.NEXT_PUBLIC_GTM_ID ?? "GTM-K47STP9P";
+
+// Google Analytics 4 measurement ID (gtag.js). Override per-environment with
+// NEXT_PUBLIC_GA_ID; falls back to the project's default property.
+const GA_ID = process.env.NEXT_PUBLIC_GA_ID ?? "G-LBWM511777";
 
 export const metadata: Metadata = {
   title: "Snake — Classic Arcade Game",
@@ -61,6 +65,7 @@ export default function RootLayout({
         ) : null}
         <ThemeProvider>{children}</ThemeProvider>
       </body>
+      {GA_ID ? <GoogleAnalytics gaId={GA_ID} /> : null}
     </html>
   );
 }
