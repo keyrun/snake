@@ -409,7 +409,14 @@ async function runSession(browser, engine, index, scenario) {
 
   const label = `#${String(index + 1).padStart(2, "0")} ${engine.padEnd(7)} ${scenario.name}`;
   let metadata = null;
-  try {
+  let ok = false;
+
+  // Per-session watchdog: a single stalled session must not freeze the batch.
+  const SESSION_TIMEOUT = Number(process.env.SESSION_TIMEOUT_MS || 90000);
+  const timeout = (ms) =>
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`session timeout after ${ms}ms`)), ms));
+
+  const work = (async () => {
     await page.goto(URL, { waitUntil: "load", timeout: 45000 });
     // Wait for Clarity to initialize.
     await page.waitForResponse((r) => r.url().includes("clarity.ms/tag/"), { timeout: 15000 }).catch(() => {});
@@ -429,12 +436,18 @@ async function runSession(browser, engine, index, scenario) {
     // Flush on unload.
     await page.goto("about:blank").catch(() => {});
     await sleep(1500);
+  })();
+
+  try {
+    await Promise.race([work, timeout(SESSION_TIMEOUT)]);
+    ok = true;
     const sid = metadata?.sessionId ?? "n/a";
     console.log(`  ✓ ${label}  (uploads: ${uploads}, session: ${sid})`);
   } catch (err) {
     console.log(`  ✗ ${label}  ERROR: ${err.message.split("\n")[0]}`);
   } finally {
-    await context.close();
+    // Bound the close too, so a wedged context can't hang the run.
+    await Promise.race([context.close().catch(() => {}), sleep(5000)]);
   }
   return {
     index: index + 1,
@@ -445,6 +458,7 @@ async function runSession(browser, engine, index, scenario) {
     capturedAt: new Date().toISOString(),
     url: URL,
     metadata,
+    ok,
   };
 }
 
@@ -455,31 +469,68 @@ async function main() {
   const launchers = {
     chrome: () => chromium.launch({ channel: "chrome", headless: HEADLESS }),
     edge: () => chromium.launch({ channel: "msedge", headless: HEADLESS }),
-    firefox: () => firefox.launch({ headless: HEADLESS }),
+    // Firefox headed can be very slow/unreliable under heavy system load; allow
+    // forcing it headless independently (HEADLESS_FIREFOX=1) while keeping the
+    // Chromium browsers headed.
+    firefox: () => firefox.launch({ headless: HEADLESS || process.env.HEADLESS_FIREFOX === "1" }),
   };
   const order = ["chrome", "edge", "firefox"];
   const browsers = {};
 
+  // Launch (or relaunch) a browser for an engine, bounding the launch time.
+  const ensureBrowser = async (engine) => {
+    if (browsers[engine]) return browsers[engine];
+    console.log(`Launching ${engine}...`);
+    const b = await Promise.race([
+      launchers[engine](),
+      new Promise((_, rej) => setTimeout(() => rej(new Error(`${engine} launch timeout`)), Number(process.env.LAUNCH_TIMEOUT_MS || 180000))),
+    ]);
+    browsers[engine] = b;
+    return b;
+  };
+
   const rows = [];
   let totalUploads = 0;
+  let failures = 0;
   for (let i = 0; i < TOTAL; i++) {
     const engine = order[i % order.length];
     const scenario = SCENARIOS[i % SCENARIOS.length];
-    if (!browsers[engine]) {
-      console.log(`Launching ${engine}...`);
-      browsers[engine] = await launchers[engine]();
+
+    let browser;
+    try {
+      browser = await ensureBrowser(engine);
+    } catch (err) {
+      console.log(`  ✗ #${String(i + 1).padStart(2, "0")} ${engine} launch failed: ${err.message}`);
+      browsers[engine] = null;
+      failures++;
+      continue;
     }
-    const row = await runSession(browsers[engine], engine, i, scenario);
+
+    const row = await runSession(browser, engine, i, scenario);
     rows.push(row);
     totalUploads += row.clarityUploads;
+
+    // If a session failed, the browser may be wedged — relaunch it next time.
+    if (!row.ok) {
+      failures++;
+      try {
+        await Promise.race([browsers[engine]?.close().catch(() => {}), new Promise((r) => setTimeout(r, 5000))]);
+      } catch {
+        /* ignore */
+      }
+      browsers[engine] = null;
+    }
   }
 
-  for (const b of Object.values(browsers)) await b.close();
+  for (const b of Object.values(browsers)) {
+    if (b) await b.close().catch(() => {});
+  }
 
   writeCsv(rows, CSV_PATH);
   const withMeta = rows.filter((r) => r.metadata).length;
-  console.log(`\nDone. ${TOTAL} sessions run. Total Clarity uploads observed: ${totalUploads}.`);
-  console.log(`Metadata captured for ${withMeta}/${TOTAL} sessions.`);
+  const ok = rows.filter((r) => r.ok).length;
+  console.log(`\nDone. ${ok}/${TOTAL} sessions succeeded (${failures} failure(s)). Total Clarity uploads observed: ${totalUploads}.`);
+  console.log(`Metadata captured for ${withMeta} session(s).`);
   console.log(`CSV written to: ${CSV_PATH}`);
 }
 

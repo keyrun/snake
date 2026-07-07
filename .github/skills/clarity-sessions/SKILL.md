@@ -43,9 +43,13 @@ npm run setup   # installs playwright + downloads the Firefox browser
 npm run generate
 
 # Or with options via env vars:
-#   TARGET_URL  site to record (default https://keymangames.vercel.app/)
-#   SESSIONS    number of sessions (default 25)
-#   HEADLESS    "1" for headless (faster, less realistic), default headed
+#   TARGET_URL          site to record (default https://keymangames.vercel.app/)
+#   SESSIONS            number of sessions (default 25)
+#   HEADLESS            "1" for headless all browsers (faster), default headed
+#   HEADLESS_FIREFOX    "1" to run only Firefox headless (Chromium stays headed)
+#   SESSION_TIMEOUT_MS  per-session watchdog (default 90000)
+#   LAUNCH_TIMEOUT_MS   per-browser launch timeout (default 180000)
+#   CSV_PATH            metadata CSV output path
 TARGET_URL="https://keymangames.vercel.app/" SESSIONS=25 node generate-sessions.mjs
 ```
 
@@ -59,6 +63,28 @@ The script prints a per-session line with the browser, scenario, the number of
 `k.clarity.ms/collect` uploads observed, and the captured Clarity `sessionId`,
 plus a final total. A healthy session shows 3+ uploads. Recordings appear in the
 Clarity dashboard within a few minutes.
+
+## Reliability
+
+The runner is resilient for large batches (e.g. 100+ sessions):
+
+- **Per-session watchdog** (`SESSION_TIMEOUT_MS`, default 90s): a stalled session
+  is aborted and logged (`✗`) instead of freezing the whole run.
+- **Bounded browser launch** (`LAUNCH_TIMEOUT_MS`, default 180s) and **bounded
+  context close**, so a wedged browser can't hang the batch.
+- **Relaunch on failure**: if a session fails, that engine's browser is closed
+  and relaunched fresh before its next turn.
+- The final line reports `N/TOTAL sessions succeeded (F failure(s))`.
+
+**Under heavy system load, headed Firefox can be very slow or fail** (page load /
+launch timeouts) while Chrome and Edge are fine. In that case run Firefox
+headless while keeping Chromium headed — this keeps all three browsers
+represented and reliable:
+
+```powershell
+$env:SESSIONS=100; $env:HEADLESS_FIREFOX=1; node generate-sessions.mjs
+```
+
 
 ## Metadata CSV output
 
