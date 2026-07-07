@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { GoogleAnalytics, GoogleTagManager } from "@next/third-parties/google";
 import "./globals.css";
+import { Analytics } from "@/components/analytics/analytics";
 import { ThemeProvider, themeInitScript } from "@/components/theme/theme-provider";
 
 const geistSans = Geist({
@@ -47,11 +47,12 @@ export default function RootLayout({
       suppressHydrationWarning
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      {GTM_ID ? <GoogleTagManager gtmId={GTM_ID} /> : null}
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
       <body className="min-h-full flex flex-col">
+        {/* GA initializes first; GTM (which enables Clarity) loads only after. */}
+        <Analytics gaId={GA_ID} gtmId={GTM_ID} />
         {GTM_ID ? (
           <noscript>
             <iframe
@@ -65,7 +66,6 @@ export default function RootLayout({
         ) : null}
         <ThemeProvider>{children}</ThemeProvider>
       </body>
-      {GA_ID ? <GoogleAnalytics gaId={GA_ID} /> : null}
     </html>
   );
 }

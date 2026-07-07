@@ -313,8 +313,6 @@ const SCENARIOS = [
 
 /* ----------------------------- Runner ---------------------------------- */
 
-const NAMES = ["Ada", "Alan", "Grace", "Linus", "Margaret", "Dennis", "Katherine", "Tim", "Barbara", "Ken"];
-
 // Pull Clarity's own session metadata via the public JS API:
 //   clarity("metadata", (d) => { ... })
 // The callback fires once metadata is ready (userId, sessionId, pageId, etc.).
