@@ -1,7 +1,24 @@
 "use client";
 
 import Script from "next/script";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+
+type GtagFn = (
+  command: string,
+  targetOrField: string,
+  fieldOrValue?: string | ((value: string) => void),
+  cb?: (value: string) => void,
+) => void;
+
+type ClarityFn = (command: string, ...args: unknown[]) => void;
+
+declare global {
+  interface Window {
+    gtag?: GtagFn;
+    clarity?: ClarityFn;
+    dataLayer?: unknown[];
+  }
+}
 
 type AnalyticsProps = {
   /** Google Analytics 4 measurement ID (e.g. G-XXXX). */
@@ -17,10 +34,44 @@ type AnalyticsProps = {
  * Google Analytics is ready before the Clarity tag fires.
  *
  * Both use the shared `dataLayer`, so GA's `config` is queued before GTM starts.
+ *
+ * After both are ready, the GA `client_id` is read via `gtag('get', …)` and set
+ * as a Clarity custom tag named `ga_client_id`, so sessions can be correlated
+ * with GA in the Clarity dashboard.
  */
 export function Analytics({ gaId, gtmId }: AnalyticsProps) {
   // If there is no GA to wait for, GTM is free to load immediately.
   const [gaReady, setGaReady] = useState<boolean>(!gaId);
+
+  useEffect(() => {
+    // Requires GA (library loaded) and Clarity (loaded via GTM) to be present.
+    if (!gaId || !gaReady) return;
+
+    let cancelled = false;
+    let attempts = 0;
+    const maxAttempts = 40; // ~10s at 250ms
+
+    const trySetClarityTag = () => {
+      if (cancelled) return;
+      const { gtag, clarity } = window;
+      if (typeof gtag === "function" && typeof clarity === "function") {
+        gtag("get", gaId, "client_id", (clientId: string) => {
+          if (cancelled || !clientId) return;
+          // Set a named, unmasked Clarity custom tag with the GA client_id.
+          clarity("set", "ga_client_id", String(clientId));
+        });
+        return;
+      }
+      if (attempts++ < maxAttempts) {
+        window.setTimeout(trySetClarityTag, 250);
+      }
+    };
+
+    trySetClarityTag();
+    return () => {
+      cancelled = true;
+    };
+  }, [gaId, gaReady]);
 
   return (
     <>
