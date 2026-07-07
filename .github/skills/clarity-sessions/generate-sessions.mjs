@@ -6,10 +6,17 @@
 // page (navigating to about:blank triggers unload -> sendBeacon) before close.
 
 import { chromium, firefox } from "playwright";
+import { writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 
 const URL = process.env.TARGET_URL || "https://keymangames.vercel.app/";
 const TOTAL = Number(process.env.SESSIONS || 25);
 const HEADLESS = process.env.HEADLESS === "1";
+const HERE = dirname(fileURLToPath(import.meta.url));
+const CSV_PATH =
+  process.env.CSV_PATH ||
+  join(HERE, `clarity-metadata-${new Date().toISOString().replace(/[:.]/g, "-")}.csv`);
 
 const cap = (s) => s[0].toUpperCase() + s.slice(1);
 const OPP = { up: "down", down: "up", left: "right", right: "left" };
@@ -308,6 +315,80 @@ const SCENARIOS = [
 
 const NAMES = ["Ada", "Alan", "Grace", "Linus", "Margaret", "Dennis", "Katherine", "Tim", "Barbara", "Ken"];
 
+// Pull Clarity's own session metadata via the public JS API:
+//   clarity("metadata", (d) => { ... })
+// The callback fires once metadata is ready (userId, sessionId, pageId, etc.).
+// Returns the raw metadata object, or null if Clarity never initialized.
+async function getClarityMetadata(page, timeoutMs = 10000) {
+  try {
+    return await page.evaluate((timeout) => {
+      return new Promise((resolve) => {
+        let settled = false;
+        const finish = (d) => {
+          if (settled) return;
+          settled = true;
+          resolve(d ?? null);
+        };
+        const tryRegister = () => {
+          try {
+            if (typeof window.clarity === "function") {
+              // Clarity invokes this callback with the metadata JSON.
+              window.clarity("metadata", (d) => finish(d));
+              return true;
+            }
+          } catch {
+            /* clarity queue not ready yet */
+          }
+          return false;
+        };
+        if (!tryRegister()) {
+          const iv = setInterval(() => {
+            if (tryRegister()) clearInterval(iv);
+          }, 300);
+          setTimeout(() => clearInterval(iv), timeout);
+        }
+        setTimeout(() => finish(null), timeout);
+      });
+    }, timeoutMs);
+  } catch {
+    return null;
+  }
+}
+
+// Write collected rows to CSV. Columns = fixed fields + the union of all
+// metadata keys observed across sessions (so any extra fields are captured).
+function writeCsv(rows, path) {
+  const base = ["index", "browser", "scenario", "device", "clarityUploads", "capturedAt", "url"];
+  const metaKeys = [];
+  for (const r of rows)
+    for (const k of Object.keys(r.metadata || {}))
+      if (!metaKeys.includes(k)) metaKeys.push(k);
+  const headers = [...base, ...metaKeys.map((k) => `meta.${k}`)];
+
+  const esc = (v) => {
+    if (v == null) return "";
+    let s = typeof v === "object" ? JSON.stringify(v) : String(v);
+    if (/[",\n]/.test(s)) s = `"${s.replace(/"/g, '""')}"`;
+    return s;
+  };
+
+  const lines = [headers.join(",")];
+  for (const r of rows) {
+    const cells = [
+      r.index,
+      r.browser,
+      r.scenario,
+      r.device,
+      r.clarityUploads,
+      r.capturedAt,
+      r.url,
+      ...metaKeys.map((k) => (r.metadata ? r.metadata[k] : "")),
+    ];
+    lines.push(cells.map(esc).join(","));
+  }
+  writeFileSync(path, lines.join("\n") + "\n", "utf8");
+}
+
 async function runSession(browser, engine, index, scenario) {
   const isChromium = engine !== "firefox";
   const useMobile = scenario.mobile && isChromium;
@@ -329,6 +410,7 @@ async function runSession(browser, engine, index, scenario) {
   });
 
   const label = `#${String(index + 1).padStart(2, "0")} ${engine.padEnd(7)} ${scenario.name}`;
+  let metadata = null;
   try {
     await page.goto(URL, { waitUntil: "load", timeout: 45000 });
     // Wait for Clarity to initialize.
@@ -342,17 +424,30 @@ async function runSession(browser, engine, index, scenario) {
       await scenario.run(page);
     }
 
-    // Let Clarity's periodic uploader run, then flush on unload.
+    // Let Clarity's periodic uploader run.
     await sleep(4000);
+    // Capture Clarity session metadata via its JS API before leaving the page.
+    metadata = await getClarityMetadata(page);
+    // Flush on unload.
     await page.goto("about:blank").catch(() => {});
     await sleep(1500);
-    console.log(`  ✓ ${label}  (clarity uploads: ${uploads})`);
+    const sid = metadata?.sessionId ?? "n/a";
+    console.log(`  ✓ ${label}  (uploads: ${uploads}, session: ${sid})`);
   } catch (err) {
     console.log(`  ✗ ${label}  ERROR: ${err.message.split("\n")[0]}`);
   } finally {
     await context.close();
   }
-  return uploads;
+  return {
+    index: index + 1,
+    browser: engine,
+    scenario: scenario.name,
+    device: useMobile ? "mobile" : "desktop",
+    clarityUploads: uploads,
+    capturedAt: new Date().toISOString(),
+    url: URL,
+    metadata,
+  };
 }
 
 async function main() {
@@ -367,6 +462,7 @@ async function main() {
   const order = ["chrome", "edge", "firefox"];
   const browsers = {};
 
+  const rows = [];
   let totalUploads = 0;
   for (let i = 0; i < TOTAL; i++) {
     const engine = order[i % order.length];
@@ -375,11 +471,18 @@ async function main() {
       console.log(`Launching ${engine}...`);
       browsers[engine] = await launchers[engine]();
     }
-    totalUploads += await runSession(browsers[engine], engine, i, scenario);
+    const row = await runSession(browsers[engine], engine, i, scenario);
+    rows.push(row);
+    totalUploads += row.clarityUploads;
   }
 
   for (const b of Object.values(browsers)) await b.close();
+
+  writeCsv(rows, CSV_PATH);
+  const withMeta = rows.filter((r) => r.metadata).length;
   console.log(`\nDone. ${TOTAL} sessions run. Total Clarity uploads observed: ${totalUploads}.`);
+  console.log(`Metadata captured for ${withMeta}/${TOTAL} sessions.`);
+  console.log(`CSV written to: ${CSV_PATH}`);
 }
 
 main().catch((e) => {

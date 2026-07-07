@@ -55,9 +55,26 @@ On Windows PowerShell:
 $env:SESSIONS=25; $env:TARGET_URL="https://keymangames.vercel.app/"; node generate-sessions.mjs
 ```
 
-The script prints a per-session line with the browser, scenario, and the number
-of `k.clarity.ms/collect` uploads observed, plus a final total. A healthy session
-shows 3+ uploads. Recordings appear in the Clarity dashboard within a few minutes.
+The script prints a per-session line with the browser, scenario, the number of
+`k.clarity.ms/collect` uploads observed, and the captured Clarity `sessionId`,
+plus a final total. A healthy session shows 3+ uploads. Recordings appear in the
+Clarity dashboard within a few minutes.
+
+## Metadata CSV output
+
+Each session queries Clarity's own JS API — `clarity("metadata", (d) => …)` —
+which returns `{ projectId, userId, sessionId, pageNum }`. All sessions are
+written to a CSV at the end of the run so you can view/correlate them:
+
+- Default path: `clarity-metadata-<timestamp>.csv` in the skill folder (override
+  with the `CSV_PATH` env var).
+- Columns: `index, browser, scenario, device, clarityUploads, capturedAt, url`
+  followed by every metadata field as `meta.<key>` (e.g. `meta.projectId`,
+  `meta.userId`, `meta.sessionId`, `meta.pageNum`). Extra metadata keys are
+  picked up automatically.
+
+Use the `meta.userId` / `meta.sessionId` values to find the exact recordings in
+the Clarity dashboard. Generated CSVs are git-ignored.
 
 ## What it does
 
@@ -75,6 +92,8 @@ shows 3+ uploads. Recordings appear in the Clarity dashboard within a few minute
   cursor is **always moved onto an interactive element before clicking it**
   (`humanHover` inside `clickIf`, and before every direct click). It also drifts
   naturally during gameplay.
+- **Metadata capture:** before leaving each page, calls `clarity("metadata", cb)`
+  and records the returned JSON to the run CSV (see above).
 - **Clarity flush:** after interacting, each session waits for Clarity's periodic
   uploader, then navigates to `about:blank` so the unload/`sendBeacon` flush fires
   before the context closes.
