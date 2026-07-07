@@ -353,10 +353,76 @@ async function getClarityMetadata(page, timeoutMs = 10000) {
   }
 }
 
+// Read the Google Analytics client_id and session_id for this session. Uses the
+// canonical gtag('get', …) API, deriving the measurement id from the `_ga_<ID>`
+// cookie, and falls back to parsing the `_ga` / `_ga_<ID>` cookies directly.
+// Returns { gaClientId, gaSessionId } (either may be null).
+async function getGaIds(page, timeoutMs = 8000) {
+  try {
+    return await page.evaluate((timeout) => {
+      return new Promise((resolve) => {
+        const cookie = document.cookie || "";
+        const cMatch = cookie.match(/(?:^|;\s*)_ga=GA\d\.\d\.([\d.]+)/);
+        const cookieClientId = cMatch ? cMatch[1] : null;
+        const sMatch = cookie.match(/(?:^|;\s*)_ga_[A-Z0-9]+=GS\d\.\d\.s?(\d+)/);
+        const cookieSessionId = sMatch ? sMatch[1] : null;
+        const midMatch = cookie.match(/_ga_([A-Z0-9]+)=/);
+        const gaId = midMatch ? "G-" + midMatch[1] : null;
+
+        const out = { gaClientId: null, gaSessionId: null };
+        let settled = false;
+        const finalize = () => {
+          if (settled) return;
+          settled = true;
+          resolve({
+            gaClientId: out.gaClientId || cookieClientId,
+            gaSessionId: out.gaSessionId || cookieSessionId,
+          });
+        };
+
+        if (typeof window.gtag !== "function" || !gaId) {
+          finalize();
+          return;
+        }
+        let pending = 2;
+        const done = () => {
+          if (--pending <= 0) finalize();
+        };
+        try {
+          window.gtag("get", gaId, "client_id", (v) => {
+            if (v) out.gaClientId = String(v);
+            done();
+          });
+          window.gtag("get", gaId, "session_id", (v) => {
+            if (v) out.gaSessionId = String(v);
+            done();
+          });
+        } catch {
+          finalize();
+          return;
+        }
+        setTimeout(finalize, timeout);
+      });
+    }, timeoutMs);
+  } catch {
+    return { gaClientId: null, gaSessionId: null };
+  }
+}
+
 // Write collected rows to CSV. Columns = fixed fields + the union of all
 // metadata keys observed across sessions (so any extra fields are captured).
 function writeCsv(rows, path) {
-  const base = ["index", "browser", "scenario", "device", "clarityUploads", "capturedAt", "url"];
+  const base = [
+    "index",
+    "browser",
+    "scenario",
+    "device",
+    "clarityUploads",
+    "gaClientId",
+    "gaSessionId",
+    "capturedAt",
+    "url",
+  ];
   const metaKeys = [];
   for (const r of rows)
     for (const k of Object.keys(r.metadata || {}))
@@ -378,6 +444,8 @@ function writeCsv(rows, path) {
       r.scenario,
       r.device,
       r.clarityUploads,
+      r.gaClientId,
+      r.gaSessionId,
       r.capturedAt,
       r.url,
       ...metaKeys.map((k) => (r.metadata ? r.metadata[k] : "")),
@@ -409,6 +477,7 @@ async function runSession(browser, engine, index, scenario) {
 
   const label = `#${String(index + 1).padStart(2, "0")} ${engine.padEnd(7)} ${scenario.name}`;
   let metadata = null;
+  let gaIds = { gaClientId: null, gaSessionId: null };
   let ok = false;
 
   // Per-session watchdog: a single stalled session must not freeze the batch.
@@ -431,8 +500,9 @@ async function runSession(browser, engine, index, scenario) {
 
     // Let Clarity's periodic uploader run.
     await sleep(4000);
-    // Capture Clarity session metadata via its JS API before leaving the page.
+    // Capture Clarity session metadata + GA ids before leaving the page.
     metadata = await getClarityMetadata(page);
+    gaIds = await getGaIds(page);
     // Flush on unload.
     await page.goto("about:blank").catch(() => {});
     await sleep(1500);
@@ -442,7 +512,7 @@ async function runSession(browser, engine, index, scenario) {
     await Promise.race([work, timeout(SESSION_TIMEOUT)]);
     ok = true;
     const sid = metadata?.sessionId ?? "n/a";
-    console.log(`  ✓ ${label}  (uploads: ${uploads}, session: ${sid})`);
+    console.log(`  ✓ ${label}  (uploads: ${uploads}, session: ${sid}, ga_cid: ${gaIds.gaClientId ?? "n/a"})`);
   } catch (err) {
     console.log(`  ✗ ${label}  ERROR: ${err.message.split("\n")[0]}`);
   } finally {
@@ -455,6 +525,8 @@ async function runSession(browser, engine, index, scenario) {
     scenario: scenario.name,
     device: useMobile ? "mobile" : "desktop",
     clarityUploads: uploads,
+    gaClientId: gaIds.gaClientId,
+    gaSessionId: gaIds.gaSessionId,
     capturedAt: new Date().toISOString(),
     url: URL,
     metadata,

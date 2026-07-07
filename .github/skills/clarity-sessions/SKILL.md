@@ -94,10 +94,13 @@ written to a CSV at the end of the run so you can view/correlate them:
 
 - Default path: `clarity-metadata-<timestamp>.csv` in the skill folder (override
   with the `CSV_PATH` env var).
-- Columns: `index, browser, scenario, device, clarityUploads, capturedAt, url`
-  followed by every metadata field as `meta.<key>` (e.g. `meta.projectId`,
-  `meta.userId`, `meta.sessionId`, `meta.pageNum`). Extra metadata keys are
-  picked up automatically.
+- Columns: `index, browser, scenario, device, clarityUploads, gaClientId,
+  gaSessionId, capturedAt, url` followed by every Clarity metadata field as
+  `meta.<key>` (e.g. `meta.projectId`, `meta.userId`, `meta.sessionId`,
+  `meta.pageNum`). Extra metadata keys are picked up automatically.
+- `gaClientId` / `gaSessionId` are the Google Analytics identifiers for the
+  session, read via `gtag('get', …)` (with a `_ga` cookie fallback), so you can
+  join Clarity recordings to GA.
 
 Use the `meta.userId` / `meta.sessionId` values to find the exact recordings in
 the Clarity dashboard. Generated CSVs are git-ignored.
