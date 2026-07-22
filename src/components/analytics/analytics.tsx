@@ -5,8 +5,8 @@ import { useEffect, useState } from "react";
 
 type GtagFn = (
   command: string,
-  targetOrField: string,
-  fieldOrValue?: string | ((value: string) => void),
+  targetOrField: string | Record<string, unknown>,
+  fieldOrValue?: string | Record<string, unknown> | ((value: string) => void),
   cb?: (value: string) => void,
 ) => void;
 
@@ -57,8 +57,16 @@ export function Analytics({ gaId, gtmId }: AnalyticsProps) {
       if (typeof gtag === "function" && typeof clarity === "function") {
         gtag("get", gaId, "client_id", (clientId: string) => {
           if (cancelled || !clientId) return;
+          const id = String(clientId);
           // Set a named, unmasked Clarity custom tag with the GA client_id.
-          clarity("set", "ga_client_id", String(clientId));
+          clarity("set", "ga_client_id", id);
+          // Set user_id to the same value so BOTH the GA measurement stream and
+          // the Google Ads remarketing tag capture it simultaneously. gtag('set')
+          // applies the id globally to every configured tag and reliably attaches
+          // it (as `uid`) to subsequent hits; the config call reaffirms it on the
+          // GA stream specifically.
+          gtag("set", { user_id: id });
+          gtag("config", gaId, { user_id: id });
         });
         return;
       }
